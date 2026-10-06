@@ -1,9 +1,10 @@
 name: Aravis for 3rdpartypublic
 
-# Builds Aravis and lays it out the way Micro-Manager's 3rdpartypublic holds
-# it. This only needs to run when something that goes into that build
-# changes. The adapter workflow does not use these artifacts directly; it
-# uses a release made from them by hand (see README.md).
+# Builds Aravis and its dependencies as static libraries and lays them out
+# the way Micro-Manager's 3rdpartypublic holds them. This only needs to run
+# when something that goes into that build changes. The adapter workflow does
+# not use these artifacts directly; it uses a release made from them by hand
+# (see README.md).
 on:
   push:
     branches: [main]
@@ -11,6 +12,7 @@ on:
       - .github/workflows/aravis.yml
       - license-overrides/**
       - scripts/arrange_3rdpartypublic.py
+      - tests/check_imports.py
       - tests/smoke.cpp
       - triplets/**
   workflow_dispatch:
@@ -25,7 +27,10 @@ concurrency:
 env:
   ARAVIS_VERSION: '0.8.36'
   VCPKG_REF: '2026.07.29'  # vcpkg release whose aravis port is ARAVIS_VERSION
-  VCPKG_TRIPLET: x64-windows-release  # defined in triplets/
+  # Both defined in triplets/. The libraries are static; the tools vcpkg runs
+  # during the build (GLib's resource compiler and so on) can stay DLLs.
+  VCPKG_TRIPLET: x64-windows-static-md-release
+  VCPKG_HOST_TRIPLET: x64-windows-release
   VCPKG_DISABLE_METRICS: '1'
   VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
 
@@ -54,31 +59,51 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: vcpkg-cache
-          key: vcpkg-${{ env.VCPKG_REF }}-${{ env.VCPKG_TRIPLET }}-${{ github.run_id }}
-          restore-keys: vcpkg-${{ env.VCPKG_REF }}-${{ env.VCPKG_TRIPLET }}-
+          key: vcpkg-${{ env.VCPKG_REF }}-${{ github.run_id }}
+          restore-keys: vcpkg-${{ env.VCPKG_REF }}-
+
+      # Source archives and build tools. Only needed when something has to be
+      # built, but then it spares a slow download (GNU's mirror has timed out
+      # for minutes at a time).
+      - name: Restore vcpkg downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg/downloads
+          key: vcpkg-downloads-${{ env.VCPKG_REF }}-${{ github.run_id }}
+          restore-keys: vcpkg-downloads-${{ env.VCPKG_REF }}-
 
       - name: Build Aravis with vcpkg
         id: build
         run: |
-          New-Item -ItemType Directory -Force -Path vcpkg-cache | Out-Null
-          $before = @(Get-ChildItem -Recurse -File vcpkg-cache).Count
+          New-Item -ItemType Directory -Force -Path vcpkg-cache, vcpkg\downloads | Out-Null
+          $packages = @(Get-ChildItem -Recurse -File vcpkg-cache).Count
+          $downloads = @(Get-ChildItem -Recurse -File vcpkg\downloads).Count
           .\vcpkg\vcpkg.exe install "aravis:$env:VCPKG_TRIPLET" `
             --overlay-triplets=triplets `
-            --host-triplet=$env:VCPKG_TRIPLET `
+            --host-triplet=$env:VCPKG_HOST_TRIPLET `
             --clean-after-build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $added = @(Get-ChildItem -Recurse -File vcpkg-cache).Count - $before
-          Write-Output "vcpkg added $added package(s) to the binary cache"
-          "added=$added" >> $env:GITHUB_OUTPUT
+          $packages = @(Get-ChildItem -Recurse -File vcpkg-cache).Count - $packages
+          $downloads = @(Get-ChildItem -Recurse -File vcpkg\downloads).Count - $downloads
+          Write-Output "vcpkg added $packages package(s) to the binary cache and downloaded $downloads file(s)"
+          "packages=$packages" >> $env:GITHUB_OUTPUT
+          "downloads=$downloads" >> $env:GITHUB_OUTPUT
 
       # Saved straight after the build, so a failure in a later step does not
-      # throw away a long GLib build, and only when something new was built.
+      # throw away a long build, and only when there is something new.
       - name: Save vcpkg binary cache
-        if: steps.build.outputs.added != '0'
+        if: steps.build.outputs.packages != '0'
         uses: actions/cache/save@v6
         with:
           path: vcpkg-cache
-          key: vcpkg-${{ env.VCPKG_REF }}-${{ env.VCPKG_TRIPLET }}-${{ github.run_id }}
+          key: vcpkg-${{ env.VCPKG_REF }}-${{ github.run_id }}
+
+      - name: Save vcpkg downloads
+        if: steps.build.outputs.downloads != '0'
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg/downloads
+          key: vcpkg-downloads-${{ env.VCPKG_REF }}-${{ github.run_id }}
 
       - uses: actions/setup-python@v7
         with:
@@ -88,31 +113,49 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pefile==2024.8.26
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pkgconf = Get-ChildItem -Recurse -File -Filter pkgconf.exe "vcpkg\installed\$env:VCPKG_HOST_TRIPLET" |
+            Select-Object -First 1
+          if (-not $pkgconf) { Write-Output "::error::vcpkg did not build pkgconf.exe"; exit 1 }
           python scripts/arrange_3rdpartypublic.py `
             --installed vcpkg\installed `
             --triplet $env:VCPKG_TRIPLET `
+            --pkgconf $pkgconf.FullName `
             --aravis-version $env:ARAVIS_VERSION `
             --vcpkg-ref $env:VCPKG_REF `
             --vcpkg-commit (git -C vcpkg rev-parse HEAD) `
+            --repo-url "${{ github.server_url }}/${{ github.repository }}" `
+            --repo-commit $env:GITHUB_SHA `
             --build-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" `
             --runner-image "$env:ImageOS $env:ImageVersion" `
-            --out out\3rdpartypublic
+            --out out\3rdpartypublic `
+            --link-list out\link-libraries.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # Unzipped into 3rdpartypublic, this gives aravis\aravis-<version>-bin.
-      - name: Upload 3rdpartypublic\aravis
+      # Unzipped into 3rdpartypublic, this gives Aravis\aravis-<version>-bin.
+      - name: Upload 3rdpartypublic\Aravis
         uses: actions/upload-artifact@v7
         with:
-          name: 3rdpartypublic-aravis-${{ env.ARAVIS_VERSION }}
+          name: 3rdpartypublic-Aravis-${{ env.ARAVIS_VERSION }}
           path: out/3rdpartypublic
           if-no-files-found: error
 
-      # arv-tool, arv-fake-gv-camera and the rest, with the DLLs they need.
+      # arv-tool, arv-fake-gv-camera and the rest, statically linked like the
+      # libraries, with the same licenses and build record.
+      - name: Collect the Aravis tools
+        run: |
+          $dir = "out\3rdpartypublic\Aravis\aravis-$env:ARAVIS_VERSION-bin"
+          New-Item -ItemType Directory -Force -Path out\tools | Out-Null
+          Copy-Item "vcpkg\installed\$env:VCPKG_TRIPLET\tools\aravis\*" out\tools
+          Copy-Item -Recurse "$dir\licenses" out\tools
+          Copy-Item "$dir\BUILD-INFO.txt" out\tools
+          python tests/check_imports.py (Get-ChildItem out\tools\*.exe).FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload the Aravis tools
         uses: actions/upload-artifact@v7
         with:
           name: aravis-tools-${{ env.ARAVIS_VERSION }}
-          path: vcpkg/installed/${{ env.VCPKG_TRIPLET }}/tools/aravis
+          path: out/tools
           if-no-files-found: error
 
       - name: Set up MSVC
@@ -120,21 +163,24 @@ jobs:
         with:
           toolset_version: '14.4'  # VS2022 (v143), as micromanager.sln uses
 
+      # Links the way the adapter's project will: the arranged libraries plus
+      # Visual Studio's default Windows libraries. Then checks that the program
+      # loads nothing but Windows DLLs, and runs it with only System32 on the
+      # search path.
       - name: Smoke test using only the arranged files
         run: |
-          $dir = "out\3rdpartypublic\aravis\aravis-$env:ARAVIS_VERSION-bin"
+          $dir = "out\3rdpartypublic\Aravis\aravis-$env:ARAVIS_VERSION-bin"
+          $libraries = Get-Content out\link-libraries.txt
           cl /nologo /EHsc /std:c++17 /W3 /MD `
             /I "$dir\include\aravis-0.8" /I "$dir\include\glib-2.0" `
             tests\smoke.cpp /Fe:smoke.exe `
-            /link /LIBPATH:"$dir\x64" aravis-0.8.lib gio-2.0.lib gobject-2.0.lib glib-2.0.lib
+            /link /LIBPATH:"$dir\x64" $libraries `
+            kernel32.lib user32.lib advapi32.lib shell32.lib ole32.lib uuid.lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # With only the arranged DLLs and Windows on the search path, a DLL
-          # missing from the arrangement stops the program from starting.
-          $env:PATH = "$PWD\$dir\x64;$env:SystemRoot\System32;$env:SystemRoot"
+          python tests/check_imports.py smoke.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
           .\smoke.exe
-          if ($LASTEXITCODE -eq -1073741515) {
-            Write-Output "::error::smoke.exe could not start: a DLL it needs is missing from $dir\x64"
-          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload vcpkg build logs

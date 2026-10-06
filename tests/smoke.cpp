@@ -1,10 +1,10 @@
 // Checks that the Aravis files arranged for 3rdpartypublic are complete.
 //
 // The workflow compiles this against the arranged headers alone, links it
-// against the arranged import libraries alone, and runs it with only the
-// arranged DLLs and Windows itself on the search path. It then grabs one
-// frame from Aravis's built-in fake camera, which needs no hardware and no
-// network but still exercises GLib, GObject, GIO and the GenICam parser.
+// against the arranged static libraries alone, checks that the result loads
+// nothing but Windows DLLs, and runs it. It then grabs one frame from
+// Aravis's built-in fake camera, which needs no hardware and no network but
+// still exercises GLib, GObject, GIO and the GenICam parser.
 
 #include <arv.h>
 

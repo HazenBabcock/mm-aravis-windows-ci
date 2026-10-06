@@ -10,29 +10,37 @@ currently builds on Linux only. This repository works out what a Windows build
 needs, so that the adapter can be added to the Windows nightly builds.
 
 Micro-Manager's Windows build does not compile its third-party libraries. It
-takes prebuilt headers, import libraries and DLLs from a directory called
-`3rdpartypublic`, which changes rarely. This repository works the same way:
-one workflow builds the Aravis files, a release made from its output fixes
-them, and a second workflow builds and tests the adapter against that release.
+takes prebuilt headers and libraries from a directory called `3rdpartypublic`,
+which changes rarely. This repository works the same way: one workflow builds
+the Aravis files, a release made from its output fixes them, and a second
+workflow builds and tests the adapter against that release.
+
+Aravis and its dependencies are built as static libraries, so the adapter
+links them into its own DLL and needs no other DLLs at run time, only Windows
+and the Visual C++ runtime.
 
 ## Workflows
 
 **Aravis for 3rdpartypublic** (`.github/workflows/aravis.yml`) runs when one of
 its own inputs changes, or when started by hand. It:
 
-1. Builds Aravis and its dependencies (GLib, libxml2, zlib, libusb) with
-   [vcpkg](https://vcpkg.io) and MSVC, from a pinned vcpkg release. Compiled
-   packages are cached between runs.
-2. Arranges the headers, import libraries and DLLs in the directory layout
-   that Micro-Manager's Windows build expects to find in `3rdpartypublic`, and
-   saves that directory as the artifact `3rdpartypublic-aravis-<version>`. It
-   contains `aravis\aravis-<version>-bin`, with the license of every package a
-   DLL comes from and a `BUILD-INFO.txt` recording how it was built.
+1. Builds Aravis and its dependencies (GLib, libffi, libintl, libiconv, PCRE2,
+   libxml2, libusb and zlib) as static libraries against the dynamic C runtime,
+   with [vcpkg](https://vcpkg.io) and MSVC, from a pinned vcpkg release.
+   Compiled packages and downloaded sources are cached between runs.
+2. Arranges the headers and static libraries in the directory layout that
+   Micro-Manager's Windows build expects to find in `3rdpartypublic`, and saves
+   that directory as the artifact `3rdpartypublic-Aravis-<version>`. It
+   contains `Aravis\aravis-<version>-bin`, with the license of every package a
+   library comes from and a `BUILD-INFO.txt` recording how it was built and
+   which libraries a project must link to use it.
 3. Saves the Aravis command-line tools (`arv-tool`, `arv-fake-gv-camera` and
-   others) as the artifact `aravis-tools-<version>`.
-4. Compiles a small test program against the arranged files alone and runs it
-   with only those DLLs on the search path. The program grabs a frame from
-   Aravis's built-in fake camera, so it needs no hardware.
+   others) with the same licenses and `BUILD-INFO.txt` as the artifact
+   `aravis-tools-<version>`, after checking that they load nothing but Windows
+   DLLs.
+4. Links a small test program against the arranged files alone, checks that
+   it loads nothing but Windows DLLs, and runs it. The program grabs a frame
+   from Aravis's built-in fake camera, so it needs no hardware.
 
 **Aravis adapter** (`.github/workflows/adapter.yml`) runs when its own files
 change, or when started by hand with a choice of mmCoreAndDevices repository and
@@ -68,35 +76,41 @@ into `3rdpartypublic`, the other holds the tools.
 run=<id of the successful run>
 version=0.8.36
 gh run download $run -R HazenBabcock/mm-aravis-windows-ci \
-    -n 3rdpartypublic-aravis-$version -D release/3rdpartypublic
+    -n 3rdpartypublic-Aravis-$version -D release/3rdpartypublic
 gh run download $run -R HazenBabcock/mm-aravis-windows-ci \
     -n aravis-tools-$version -D release/tools
-(cd release/3rdpartypublic && zip -r ../3rdpartypublic-aravis-$version.zip .)
+(cd release/3rdpartypublic && zip -r ../3rdpartypublic-Aravis-$version.zip .)
 (cd release/tools && zip -r ../aravis-tools-$version.zip .)
 gh release create aravis-$version -R HazenBabcock/mm-aravis-windows-ci \
-    release/3rdpartypublic-aravis-$version.zip release/aravis-tools-$version.zip \
+    release/3rdpartypublic-Aravis-$version.zip release/aravis-tools-$version.zip \
     --title "Aravis $version for 3rdpartypublic" \
-    --notes-file release/3rdpartypublic/aravis/aravis-$version-bin/BUILD-INFO.txt
+    --notes-file release/3rdpartypublic/Aravis/aravis-$version-bin/BUILD-INFO.txt
 ```
 
 A rebuild of the same Aravis version gets a numbered tag such as
-`aravis-0.8.36-2`. Either way, update `ARAVIS_RELEASE` in `adapter.yml` to
-switch the adapter tests to the new release.
+`aravis-0.8.36-3`. Either way, update `ARAVIS_RELEASE` in `adapter.yml` to
+switch the adapter tests to the new release. Releases `aravis-0.8.36` and
+`aravis-0.8.36-2` hold DLL builds from before the switch to static linking.
 
 ## Files
 
 - `.github/workflows/aravis.yml`, `.github/workflows/adapter.yml`: the
   workflows.
 - `scripts/arrange_3rdpartypublic.py`: builds the `3rdpartypublic` layout from
-  vcpkg's output, following the DLL imports from the Aravis DLL to decide
-  which DLLs to include.
+  vcpkg's output, taking the libraries from pkgconf's static link line for
+  Aravis.
 - `license-overrides/`: license texts used in place of what vcpkg installs,
   where vcpkg installs a pointer to the license rather than the license
   itself. Its README says where each one came from.
 - `tests/smoke.cpp`: the test program.
+- `tests/check_imports.py`: checks that Windows binaries load only DLLs that
+  come with Windows.
 - `tests/load_adapter.py`: loads the adapter with pymmcore, and optionally
   snaps from a camera.
-- `triplets/x64-windows-release.cmake`: a vcpkg triplet for release-only DLLs.
+- `triplets/x64-windows-static-md-release.cmake`: the vcpkg triplet for the
+  static libraries.
+- `triplets/x64-windows-release.cmake`: the vcpkg triplet for the tools vcpkg
+  runs during the build.
 
 ## Status
 
