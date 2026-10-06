@@ -37,7 +37,11 @@ its own inputs changes, or when started by hand. It:
 3. Saves the Aravis command-line tools (`arv-tool`, `arv-fake-gv-camera` and
    others) with the same licenses and `BUILD-INFO.txt` as the artifact
    `aravis-tools-<version>`, after checking that they load nothing but Windows
-   DLLs.
+   DLLs. Static linking leaves the tools without Aravis's built-in fake-camera
+   description, so the artifact also holds `arv-fake-camera.xml` from the same
+   Aravis release; start the fake GigE camera with
+   `arv-fake-gv-camera-0.8 -g arv-fake-camera.xml`. The workflow serves it on
+   the loopback interface and reads it back with `arv-tool`.
 4. Links a small test program against the arranged files alone, checks that
    it loads nothing but Windows DLLs, and runs it. The program grabs a frame
    from Aravis's built-in fake camera, so it needs no hardware.

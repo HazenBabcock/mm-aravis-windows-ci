@@ -155,7 +155,10 @@ jobs:
           if-no-files-found: error
 
       # arv-tool, arv-fake-gv-camera and the rest, statically linked like the
-      # libraries, with the same licenses and build record.
+      # libraries, with the same licenses and build record. Static linking
+      # drops Aravis's built-in fake-camera description from the tools, so
+      # arv-fake-camera.xml from the same Aravis release comes along, for
+      # arv-fake-gv-camera's -g option.
       - name: Collect the Aravis tools
         run: |
           $dir = "out\3rdpartypublic\Aravis\aravis-$env:ARAVIS_VERSION-bin"
@@ -163,6 +166,8 @@ jobs:
           Copy-Item "vcpkg\installed\$env:VCPKG_TRIPLET\tools\aravis\*" out\tools
           Copy-Item -Recurse "$dir\licenses" out\tools
           Copy-Item "$dir\BUILD-INFO.txt" out\tools
+          Invoke-WebRequest -OutFile out\tools\arv-fake-camera.xml `
+            "https://raw.githubusercontent.com/AravisProject/aravis/$env:ARAVIS_VERSION/src/arv-fake-camera.xml"
           python tests/check_imports.py (Get-ChildItem out\tools\*.exe).FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -173,10 +178,30 @@ jobs:
           path: out/tools
           if-no-files-found: error
 
+      # Serves the fake GigE camera on loopback with that description, as the
+      # adapter tests do, and reads its width back with arv-tool.
+      - name: Check the fake GigE camera
+        run: |
+          $fake = Start-Process -PassThru -NoNewWindow `
+            -FilePath out\tools\arv-fake-gv-camera-0.8.exe `
+            -ArgumentList '-i', '127.0.0.1', '-s', 'GV01', '-g', "$PWD\out\tools\arv-fake-camera.xml"
+          Start-Sleep -Seconds 3
+          & out\tools\arv-tool-0.8.exe
+          $width = & out\tools\arv-tool-0.8.exe -n Aravis-Fake-GV01 control Width
+          $result = $LASTEXITCODE
+          Write-Output $width
+          Stop-Process -Id $fake.Id -Force
+          if ($result -ne 0 -or -not ($width -match '^Width = 512')) {
+            Write-Output "::error::arv-tool could not read the fake GigE camera's width"
+            exit 1
+          }
+
       # Links the way the adapter's project will: the arranged libraries plus
-      # Visual Studio's default Windows libraries. Then checks that the program
-      # loads nothing but Windows DLLs, and runs it with only System32 on the
-      # search path.
+      # Visual Studio's default Windows libraries. /INCLUDE keeps the object
+      # that registers Aravis's built-in fake-camera description, which the
+      # linker would otherwise drop because nothing calls it by name. Then
+      # checks that the program loads nothing but Windows DLLs, and runs it
+      # with only System32 on the search path.
       - name: Smoke test using only the arranged files
         run: |
           $dir = "out\3rdpartypublic\Aravis\aravis-$env:ARAVIS_VERSION-bin"
@@ -185,7 +210,8 @@ jobs:
             /I "$dir\include\aravis-0.8" /I "$dir\include\glib-2.0" `
             tests\smoke.cpp /Fe:smoke.exe `
             /link /LIBPATH:"$dir\x64" $libraries `
-            kernel32.lib user32.lib advapi32.lib shell32.lib ole32.lib uuid.lib
+            kernel32.lib user32.lib advapi32.lib shell32.lib ole32.lib uuid.lib `
+            /INCLUDE:arvresources_get_resource
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/check_imports.py smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

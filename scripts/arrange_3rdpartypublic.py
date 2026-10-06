@@ -288,6 +288,9 @@ def main():
     lines += [f"  {name}" for name in system_libraries]
     lines += ["", "To link Aravis, add x64 to the library directories and list these "
               "as additional dependencies:", "  " + ";".join(link_order)]
+    lines += ["", "Aravis's built-in fake camera also needs the linker option "
+              "/INCLUDE:arvresources_get_resource;", "without it the linker drops "
+              "the fake camera's GenICam description. Real cameras do not need it."]
     if overridden:
         lines += ["", "Licenses taken from license-overrides/ in "
                   f"{args.repo_url}, because vcpkg installs something other than "
