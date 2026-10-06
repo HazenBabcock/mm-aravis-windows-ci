@@ -21,13 +21,21 @@ needs, so that the adapter can be added to the Windows nightly builds.
    recording how it was built.
 3. Compiles a small test program against the arranged files alone and runs it
    with only those DLLs on the search path. The program grabs a frame from
-   Aravis's built-in fake camera, so it needs no hardware.
+   Aravis's built-in fake camera, so it needs no hardware. The Aravis
+   command-line tools (`arv-tool`, `arv-fake-gv-camera` and others) are saved
+   as a second artifact, `aravis-tools-<version>`.
+4. In a second job, builds the adapter with MSBuild from the `aravis-windows`
+   branch of
+   [HazenBabcock/mmCoreAndDevices](https://github.com/HazenBabcock/mmCoreAndDevices/tree/aravis-windows),
+   using the arranged files as `3rdpartypublic`. The adapter and its DLLs are
+   saved as the artifact `mmgr_dal_AravisCamera-staged`.
+5. Loads the adapter with [pymmcore](https://github.com/micro-manager/pymmcore)
+   and lists the cameras it finds, then tries to snap an image from Aravis's
+   fake GigE camera served on the loopback interface.
 
 Still to come:
 
-4. Build the adapter with MSBuild from the `aravis-windows` branch of
-   [HazenBabcock/mmCoreAndDevices](https://github.com/HazenBabcock/mmCoreAndDevices/tree/aravis-windows).
-5. Install a current Micro-Manager nightly build, add the adapter and its
+6. Install a current Micro-Manager nightly build, add the adapter and its
    DLLs, and check that the adapter loads.
 
 ## Files
@@ -37,6 +45,8 @@ Still to come:
   vcpkg's output, following the DLL imports from the Aravis DLL to decide
   which DLLs to include.
 - `tests/smoke.cpp`: the test program.
+- `tests/load_adapter.py`: loads the adapter with pymmcore, and optionally
+  snaps from a camera.
 - `triplets/x64-windows-release.cmake`: a vcpkg triplet for release-only DLLs.
 
 ## Status

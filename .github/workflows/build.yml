@@ -15,6 +15,9 @@ env:
   VCPKG_TRIPLET: x64-windows-release  # defined in triplets/
   VCPKG_DISABLE_METRICS: '1'
   VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
+  MMCOREANDDEVICES_REPO: HazenBabcock/mmCoreAndDevices
+  MMCOREANDDEVICES_REF: aravis-windows
+  PYMMCORE_VERSION: '12.5.0.75.0'  # device interface 75, as in MMCOREANDDEVICES_REF
 
 jobs:
   aravis:
@@ -87,6 +90,14 @@ jobs:
           path: out/3rdpartypublic
           if-no-files-found: error
 
+      # arv-tool, arv-fake-gv-camera and the rest, with the DLLs they need.
+      - name: Upload the Aravis tools
+        uses: actions/upload-artifact@v7
+        with:
+          name: aravis-tools-${{ env.ARAVIS_VERSION }}
+          path: vcpkg/installed/${{ env.VCPKG_TRIPLET }}/tools/aravis
+          if-no-files-found: error
+
       - name: Set up MSVC
         uses: compnerd/gha-setup-vsdevenv@452f99effa381b81c025ccfbdccaca509bff1b29 # v7
         with:
@@ -116,3 +127,86 @@ jobs:
           name: vcpkg-logs
           path: vcpkg/buildtrees/**/*.log
           if-no-files-found: ignore
+
+  adapter:
+    name: Aravis adapter
+    needs: aravis
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # micromanager.sln finds 3rdpartypublic two levels above
+      # mmCoreAndDevices, beside the micro-manager directory.
+      - name: Check out ${{ env.MMCOREANDDEVICES_REPO }} ${{ env.MMCOREANDDEVICES_REF }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.MMCOREANDDEVICES_REPO }}
+          ref: ${{ env.MMCOREANDDEVICES_REF }}
+          path: micro-manager/mmCoreAndDevices
+
+      - name: Download 3rdpartypublic\aravis
+        uses: actions/download-artifact@v8
+        with:
+          name: 3rdpartypublic-aravis-${{ env.ARAVIS_VERSION }}
+          path: 3rdpartypublic
+
+      - name: Download the Aravis tools
+        uses: actions/download-artifact@v8
+        with:
+          name: aravis-tools-${{ env.ARAVIS_VERSION }}
+          path: aravis-tools
+
+      - name: Set up MSVC
+        uses: compnerd/gha-setup-vsdevenv@452f99effa381b81c025ccfbdccaca509bff1b29 # v7
+        with:
+          toolset_version: '14.4'
+
+      - name: Build the adapter
+        run: |
+          msbuild micro-manager\mmCoreAndDevices\micromanager.sln `
+            /t:AravisCamera /p:Configuration=Release /p:Platform=x64 `
+            /m /nologo /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The adapter and every DLL that DeviceAdapters\Aravis\build.xml
+      # installs, in one directory, as in a Micro-Manager installation.
+      - name: Stage the adapter with its DLLs
+        run: |
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item micro-manager\mmCoreAndDevices\build\Release\x64\mmgr_dal_AravisCamera.dll stage
+          Copy-Item "3rdpartypublic\aravis\aravis-$env:ARAVIS_VERSION-bin\x64\*.dll" stage
+          Get-ChildItem stage | Format-Table -AutoSize Name, Length
+
+      - name: Upload the staged adapter
+        uses: actions/upload-artifact@v7
+        with:
+          name: mmgr_dal_AravisCamera-staged
+          path: stage
+          if-no-files-found: error
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Load the adapter with pymmcore
+        run: |
+          python -m pip install --disable-pip-version-check pymmcore==$env:PYMMCORE_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/load_adapter.py stage
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Exploratory until it is known to work on Windows: whether Aravis
+      # discovers a GigE camera served on the loopback interface there.
+      - name: Snap from Aravis's fake GigE camera
+        continue-on-error: true
+        run: |
+          $env:PATH = "$PWD\aravis-tools;$PWD\stage;$env:PATH"
+          $fake = Start-Process -PassThru -NoNewWindow `
+            -FilePath aravis-tools\arv-fake-gv-camera-0.8.exe `
+            -ArgumentList '-i', '127.0.0.1', '-s', 'GV01'
+          Start-Sleep -Seconds 3
+          python tests/load_adapter.py stage --snap Fake
+          $result = $LASTEXITCODE
+          Stop-Process -Id $fake.Id -Force
+          exit $result
