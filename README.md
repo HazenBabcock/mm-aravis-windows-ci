@@ -43,3 +43,9 @@ Still to come:
 
 Work in progress. The upstream discussion is
 [micro-manager/mmCoreAndDevices#465](https://github.com/micro-manager/mmCoreAndDevices/issues/465).
+
+## License
+
+BSD 3-clause; see [LICENSE](LICENSE). This covers the files in this
+repository. The Aravis files the workflow produces keep their own licenses,
+which it copies into the artifact.
