@@ -31,10 +31,9 @@ env:
   # during the build (GLib's resource compiler and so on) can stay DLLs.
   VCPKG_TRIPLET: x64-windows-static-md-release
   VCPKG_HOST_TRIPLET: x64-windows-release
-  # The compiler the static triplet pins: v143, MSVC 14.44.35207. The arrange
-  # step fails if any object in the libraries came from another build.
+  # The toolset the static triplet pins. The arrange step checks that every
+  # object in the libraries came from the compiler this workflow links with.
   MSVC_TOOLSET: v143 (MSVC 14.44)
-  MSVC_COMPILER_BUILD: '35207'
   VCPKG_DISABLE_METRICS: '1'
   VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
 
@@ -113,6 +112,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set up MSVC
+        uses: compnerd/gha-setup-vsdevenv@452f99effa381b81c025ccfbdccaca509bff1b29 # v7
+        with:
+          toolset_version: '14.4'  # VS2022 (v143), as micromanager.sln uses
+
       - name: Arrange the files for 3rdpartypublic
         run: |
           python -m pip install --disable-pip-version-check pefile==2024.8.26
@@ -120,6 +124,11 @@ jobs:
           $pkgconf = Get-ChildItem -Recurse -File -Filter pkgconf.exe "vcpkg\installed\$env:VCPKG_HOST_TRIPLET" |
             Select-Object -First 1
           if (-not $pkgconf) { Write-Output "::error::vcpkg did not build pkgconf.exe"; exit 1 }
+          # An object from the compiler that will link the libraries, for
+          # the script to compare their compiler stamps against.
+          Set-Content -Path out-probe.c -Value 'int probe;'
+          cl /nologo /c out-probe.c /Fo:out-probe.obj
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/arrange_3rdpartypublic.py `
             --installed vcpkg\installed `
             --triplet $env:VCPKG_TRIPLET `
@@ -130,7 +139,7 @@ jobs:
             --repo-url "${{ github.server_url }}/${{ github.repository }}" `
             --repo-commit $env:GITHUB_SHA `
             --toolset $env:MSVC_TOOLSET `
-            --compiler-build $env:MSVC_COMPILER_BUILD `
+            --compiler-probe out-probe.obj `
             --build-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" `
             --runner-image "$env:ImageOS $env:ImageVersion" `
             --out out\3rdpartypublic `
@@ -163,11 +172,6 @@ jobs:
           name: aravis-tools-${{ env.ARAVIS_VERSION }}
           path: out/tools
           if-no-files-found: error
-
-      - name: Set up MSVC
-        uses: compnerd/gha-setup-vsdevenv@452f99effa381b81c025ccfbdccaca509bff1b29 # v7
-        with:
-          toolset_version: '14.4'  # VS2022 (v143), as micromanager.sln uses
 
       # Links the way the adapter's project will: the arranged libraries plus
       # Visual Studio's default Windows libraries. Then checks that the program

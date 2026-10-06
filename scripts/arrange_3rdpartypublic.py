@@ -108,31 +108,43 @@ def archive_members(data):
         pos += 60 + size + (size & 1)
 
 
-def compiler_builds(library):
-    """Return (Counter of compiler build numbers, count of /GL objects).
+def object_build(obj):
+    """Return the compiler build number of a COFF object, "GL" for a /GL
+    object, or None when it has neither (an import stub, say).
 
     Each object Microsoft's compiler writes carries an @comp.id symbol whose
     low 16 bits are the compiler's build number. Objects compiled with /GL
     hold intermediate code instead, behind an anonymous object header with
     no symbol table, and only the same compiler version can link them.
     """
+    if len(obj) < 20:
+        return None
+    sig1, sig2 = struct.unpack_from("<HH", obj, 0)
+    if sig1 == 0 and sig2 == 0xFFFF:
+        # Anonymous header: an import stub (version 0), or /GL code.
+        return "GL" if struct.unpack_from("<H", obj, 4)[0] >= 1 else None
+    machine, _, _, symbols, count = struct.unpack_from("<HHIII", obj, 0)
+    if machine != 0x8664 or symbols + 18 * count > len(obj):
+        return None  # not an x64 object, e.g. an archive's index member
+    for i in range(count):
+        entry = obj[symbols + 18 * i:symbols + 18 * i + 18]
+        if entry[:8] == b"@comp.id":
+            return struct.unpack_from("<I", entry, 8)[0] & 0xFFFF
+    return None
+
+
+def compiler_builds(library):
+    """Return (Counter of compiler build numbers, count of /GL objects)."""
     builds = collections.Counter()
     whole_program = 0
     for name, obj in archive_members(library.read_bytes()):
-        if name in ("/", "//", "/<ECSYMBOLS>/") or len(obj) < 20:
+        if name in ("/", "//", "/<ECSYMBOLS>/"):
             continue
-        sig1, sig2 = struct.unpack_from("<HH", obj, 0)
-        if sig1 == 0 and sig2 == 0xFFFF:
-            # Anonymous header: an import stub (version 0), or /GL code.
-            if struct.unpack_from("<H", obj, 4)[0] >= 1:
-                whole_program += 1
-            continue
-        machine, _, _, symbols, count = struct.unpack_from("<HHIII", obj, 0)
-        for i in range(count):
-            entry = obj[symbols + 18 * i:symbols + 18 * i + 18]
-            if entry[:8] == b"@comp.id":
-                builds[struct.unpack_from("<I", entry, 8)[0] & 0xFFFF] += 1
-                break
+        build = object_build(obj)
+        if build == "GL":
+            whole_program += 1
+        elif build is not None:
+            builds[build] += 1
     return builds, whole_program
 
 
@@ -158,8 +170,10 @@ def main():
                         help="the commit of this repository the build ran from")
     parser.add_argument("--toolset", default="",
                         help="the MSVC toolset the triplet asks for, e.g. 'v143 (MSVC 14.44)'")
-    parser.add_argument("--compiler-build", type=int,
-                        help="fail unless every object was compiled by this compiler build")
+    parser.add_argument("--compiler-probe", type=Path,
+                        help="an object file compiled by the compiler that will link "
+                             "the libraries; fail unless every object in them was "
+                             "compiled by that same compiler build")
     parser.add_argument("--build-url", default="")
     parser.add_argument("--runner-image", default="")
     parser.add_argument("--out", type=Path, required=True,
@@ -222,9 +236,13 @@ def main():
             fail(f"no vcpkg port lists {name}")
         library_ports[name] = port
 
-    if args.compiler_build is not None and set(all_builds) != {args.compiler_build}:
-        fail(f"expected every object to come from compiler build {args.compiler_build}, "
-             f"found builds {dict(all_builds)}; did the triplet's toolset take effect?")
+    if args.compiler_probe is not None:
+        expected = object_build(args.compiler_probe.read_bytes())
+        if not isinstance(expected, int):
+            fail(f"{args.compiler_probe} has no compiler build stamp")
+        if set(all_builds) != {expected}:
+            fail(f"the linking compiler is build {expected}, but the libraries' objects "
+                 f"come from builds {dict(all_builds)}; did the triplet's toolset take effect?")
 
     # Licenses, one per package that contributes a library.
     licenses = out / "licenses"
