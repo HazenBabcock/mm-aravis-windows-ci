@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ARAVIS_RELEASE: aravis-0.8.36  # release of this repository with the Aravis files
+  ARAVIS_RELEASE: aravis-0.8.36-2  # release of this repository with the Aravis files
   ARAVIS_VERSION: '0.8.36'
   MMCOREANDDEVICES_REPO: ${{ inputs.repository || 'HazenBabcock/mmCoreAndDevices' }}
   MMCOREANDDEVICES_REF: ${{ inputs.ref || 'aravis-windows' }}
