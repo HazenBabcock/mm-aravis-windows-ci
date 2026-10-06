@@ -31,6 +31,10 @@ env:
   # during the build (GLib's resource compiler and so on) can stay DLLs.
   VCPKG_TRIPLET: x64-windows-static-md-release
   VCPKG_HOST_TRIPLET: x64-windows-release
+  # The compiler the static triplet pins: v143, MSVC 14.44.35207. The arrange
+  # step fails if any object in the libraries came from another build.
+  MSVC_TOOLSET: v143 (MSVC 14.44)
+  MSVC_COMPILER_BUILD: '35207'
   VCPKG_DISABLE_METRICS: '1'
   VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
 
@@ -125,6 +129,8 @@ jobs:
             --vcpkg-commit (git -C vcpkg rev-parse HEAD) `
             --repo-url "${{ github.server_url }}/${{ github.repository }}" `
             --repo-commit $env:GITHUB_SHA `
+            --toolset $env:MSVC_TOOLSET `
+            --compiler-build $env:MSVC_COMPILER_BUILD `
             --build-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" `
             --runner-image "$env:ImageOS $env:ImageVersion" `
             --out out\3rdpartypublic `

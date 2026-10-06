@@ -24,8 +24,10 @@ the license text.
 """
 
 import argparse
+import collections
 import os
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -94,6 +96,46 @@ def static_link_libraries(pkgconf, tree):
     return libraries
 
 
+def archive_members(data):
+    """Yield (name, bytes) for each member of a .lib (ar) archive."""
+    if data[:8] != b"!<arch>\n":
+        raise ValueError("not an archive")
+    pos = 8
+    while pos + 60 <= len(data):
+        header = data[pos:pos + 60]
+        size = int(header[48:58])
+        yield header[:16].decode("ascii", "replace").strip(), data[pos + 60:pos + 60 + size]
+        pos += 60 + size + (size & 1)
+
+
+def compiler_builds(library):
+    """Return (Counter of compiler build numbers, count of /GL objects).
+
+    Each object Microsoft's compiler writes carries an @comp.id symbol whose
+    low 16 bits are the compiler's build number. Objects compiled with /GL
+    hold intermediate code instead, behind an anonymous object header with
+    no symbol table, and only the same compiler version can link them.
+    """
+    builds = collections.Counter()
+    whole_program = 0
+    for name, obj in archive_members(library.read_bytes()):
+        if name in ("/", "//", "/<ECSYMBOLS>/") or len(obj) < 20:
+            continue
+        sig1, sig2 = struct.unpack_from("<HH", obj, 0)
+        if sig1 == 0 and sig2 == 0xFFFF:
+            # Anonymous header: an import stub (version 0), or /GL code.
+            if struct.unpack_from("<H", obj, 4)[0] >= 1:
+                whole_program += 1
+            continue
+        machine, _, _, symbols, count = struct.unpack_from("<HHIII", obj, 0)
+        for i in range(count):
+            entry = obj[symbols + 18 * i:symbols + 18 * i + 18]
+            if entry[:8] == b"@comp.id":
+                builds[struct.unpack_from("<I", entry, 8)[0] & 0xFFFF] += 1
+                break
+    return builds, whole_program
+
+
 def copy_tree(source, destination):
     if not source.is_dir():
         fail(f"{source} does not exist")
@@ -114,6 +156,10 @@ def main():
     parser.add_argument("--repo-url", default="https://github.com/HazenBabcock/mm-aravis-windows-ci")
     parser.add_argument("--repo-commit", required=True,
                         help="the commit of this repository the build ran from")
+    parser.add_argument("--toolset", default="",
+                        help="the MSVC toolset the triplet asks for, e.g. 'v143 (MSVC 14.44)'")
+    parser.add_argument("--compiler-build", type=int,
+                        help="fail unless every object was compiled by this compiler build")
     parser.add_argument("--build-url", default="")
     parser.add_argument("--runner-image", default="")
     parser.add_argument("--out", type=Path, required=True,
@@ -159,16 +205,26 @@ def main():
     libraries = static_link_libraries(args.pkgconf, tree)
     library_ports = {}
     system_libraries = []
+    all_builds = collections.Counter()
     for name in libraries:
         library = tree / "lib" / name
         if not library.exists():
             system_libraries.append(name)
             continue
+        builds, whole_program = compiler_builds(library)
+        if whole_program:
+            fail(f"{name} has {whole_program} object(s) compiled with /GL, which "
+                 f"only the identical compiler version can link")
+        all_builds.update(builds)
         shutil.copy2(library, x64)
         port = owners.get(f"{args.triplet}/lib/{name}".lower())
         if port is None:
             fail(f"no vcpkg port lists {name}")
         library_ports[name] = port
+
+    if args.compiler_build is not None and set(all_builds) != {args.compiler_build}:
+        fail(f"expected every object to come from compiler build {args.compiler_build}, "
+             f"found builds {dict(all_builds)}; did the triplet's toolset take effect?")
 
     # Licenses, one per package that contributes a library.
     licenses = out / "licenses"
@@ -200,6 +256,9 @@ def main():
         f"Built from:   {args.repo_url} at commit {args.repo_commit}",
         f"vcpkg:        {args.vcpkg_ref} ({args.vcpkg_commit})",
         f"Triplet:      {args.triplet} (static libraries, dynamic C runtime /MD, release build)",
+        f"Compiler:     {args.toolset + ', ' if args.toolset else ''}build "
+        + ", ".join(str(b) for b in sorted(all_builds))
+        + " (from the objects' @comp.id); no /GL objects",
     ]
     if args.runner_image:
         lines.append(f"Runner image: {args.runner_image}")
