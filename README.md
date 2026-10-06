@@ -45,8 +45,8 @@ branch. It:
    (by default), and saves the adapter and its DLLs as the artifact
    `mmgr_dal_AravisCamera-staged`.
 3. Loads the adapter with [pymmcore](https://github.com/micro-manager/pymmcore)
-   and lists the cameras it finds, then tries to snap an image from Aravis's
-   fake GigE camera served on the loopback interface.
+   and lists the cameras it finds, then snaps an image from Aravis's fake GigE
+   camera served on the loopback interface.
 
 To test another branch:
 

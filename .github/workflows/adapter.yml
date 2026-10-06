@@ -101,10 +101,10 @@ jobs:
           python tests/load_adapter.py stage
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # Exploratory until it is known to work on Windows: whether Aravis
-      # discovers a GigE camera served on the loopback interface there.
+      # Aravis discovers a GigE camera served on the loopback interface, so
+      # this takes the adapter through discovery, opening the camera and a
+      # snap without any hardware.
       - name: Snap from Aravis's fake GigE camera
-        continue-on-error: true
         run: |
           $env:PATH = "$PWD\aravis-tools;$PWD\stage;$env:PATH"
           $fake = Start-Process -PassThru -NoNewWindow `
