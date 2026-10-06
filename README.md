@@ -90,6 +90,9 @@ switch the adapter tests to the new release.
 - `scripts/arrange_3rdpartypublic.py`: builds the `3rdpartypublic` layout from
   vcpkg's output, following the DLL imports from the Aravis DLL to decide
   which DLLs to include.
+- `license-overrides/`: license texts used in place of what vcpkg installs,
+  where vcpkg installs a pointer to the license rather than the license
+  itself. Its README says where each one came from.
 - `tests/smoke.cpp`: the test program.
 - `tests/load_adapter.py`: loads the adapter with pymmcore, and optionally
   snaps from a camera.

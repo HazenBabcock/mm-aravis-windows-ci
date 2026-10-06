@@ -14,6 +14,10 @@ The result, under --out:
 The DLLs are found by following the import tables from the Aravis DLL, so
 x64 holds exactly what Aravis loads and nothing else vcpkg happened to
 install.
+
+Licenses come from vcpkg, except where license-overrides/ in this repository
+has a file for the package, because vcpkg installed something other than
+the license text.
 """
 
 import argparse
@@ -26,6 +30,13 @@ import pefile
 # The libraries the adapter links against directly; it calls GLib and GObject
 # functions itself as well as Aravis ones.
 LINK_LIBRARIES = ["aravis-0.8", "gio-2.0", "gobject-2.0", "glib-2.0"]
+
+LICENSE_OVERRIDES = Path(__file__).resolve().parent.parent / "license-overrides"
+
+# Every real license in this build is over 1000 bytes. A file shorter than
+# this is most likely a pointer to a license, not the license itself, which
+# is what vcpkg installs for PCRE2.
+MIN_LICENSE_BYTES = 500
 
 
 def fail(message):
@@ -168,10 +179,20 @@ def main():
     # Licenses, one per package that contributes a DLL.
     licenses = out / "licenses"
     licenses.mkdir()
+    overridden = []
     for port in sorted(set(dll_ports.values())):
-        source = tree / "share" / port / "copyright"
+        source = LICENSE_OVERRIDES / f"{port}.txt"
+        if source.exists():
+            overridden.append(port)
+        else:
+            source = tree / "share" / port / "copyright"
         if not source.exists():
             fail(f"{source} does not exist")
+        if source.stat().st_size < MIN_LICENSE_BYTES:
+            fail(f"the license vcpkg installed for {port} is only "
+                 f"{source.stat().st_size} bytes, so it is probably a pointer to "
+                 f"the license rather than the license itself; put the real "
+                 f"text in {LICENSE_OVERRIDES / (port + '.txt')}")
         shutil.copy2(source, licenses / f"{port}.txt")
 
     # Provenance.
@@ -192,6 +213,11 @@ def main():
     lines += [f"  {name}.lib" for name in LINK_LIBRARIES]
     lines += ["", "DLLs these load from Windows or the Visual C++ runtime:"]
     lines += [f"  {name}" for name in external]
+    if overridden:
+        lines += ["", "Licenses taken from license-overrides/ in "
+                  "https://github.com/HazenBabcock/mm-aravis-windows-ci, because "
+                  "vcpkg installs something other than the license text:"]
+        lines += [f"  {port}" for port in overridden]
     (out / "BUILD-INFO.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     print("\n".join(lines))
