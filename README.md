@@ -54,8 +54,9 @@ branch. It:
    `3rdpartypublic`.
 2. Builds the adapter with MSBuild from the `aravis-windows` branch of
    [HazenBabcock/mmCoreAndDevices](https://github.com/HazenBabcock/mmCoreAndDevices/tree/aravis-windows)
-   (by default), and saves the adapter and its DLLs as the artifact
-   `mmgr_dal_AravisCamera-staged`.
+   (by default), checks that `mmgr_dal_AravisCamera.dll` loads nothing but
+   Windows and Visual C++ runtime DLLs, and saves it as the artifact
+   `mmgr_dal_AravisCamera`.
 3. Loads the adapter with [pymmcore](https://github.com/micro-manager/pymmcore)
    and lists the cameras it finds, then snaps an image from Aravis's fake GigE
    camera served on the loopback interface.
@@ -67,7 +68,7 @@ gh workflow run adapter.yml -R HazenBabcock/mm-aravis-windows-ci -f ref=<branch>
 ```
 
 Still to come: installing a current Micro-Manager nightly build, adding the
-adapter and its DLLs, and checking that the adapter loads there.
+adapter, and checking that the adapter loads there.
 
 ## Publishing the Aravis files
 

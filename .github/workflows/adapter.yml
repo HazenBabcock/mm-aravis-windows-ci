@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/adapter.yml
+      - tests/check_imports.py
       - tests/load_adapter.py
   workflow_dispatch:
     inputs:
@@ -26,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ARAVIS_RELEASE: aravis-0.8.36-2  # release of this repository with the Aravis files
+  ARAVIS_RELEASE: aravis-0.8.36-3  # release of this repository with the Aravis files
   ARAVIS_VERSION: '0.8.36'
   MMCOREANDDEVICES_REPO: ${{ inputs.repository || 'HazenBabcock/mmCoreAndDevices' }}
   MMCOREANDDEVICES_REF: ${{ inputs.ref || 'aravis-windows' }}
@@ -58,9 +59,9 @@ jobs:
             Write-Output "::error::Could not download release $env:ARAVIS_RELEASE of this repository. See 'Publishing the Aravis files' in README.md."
             exit 1
           }
-          Expand-Archive "release\3rdpartypublic-aravis-$env:ARAVIS_VERSION.zip" -DestinationPath 3rdpartypublic
+          Expand-Archive "release\3rdpartypublic-Aravis-$env:ARAVIS_VERSION.zip" -DestinationPath 3rdpartypublic
           Expand-Archive "release\aravis-tools-$env:ARAVIS_VERSION.zip" -DestinationPath aravis-tools
-          Get-Content "3rdpartypublic\aravis\aravis-$env:ARAVIS_VERSION-bin\BUILD-INFO.txt"
+          Get-Content "3rdpartypublic\Aravis\aravis-$env:ARAVIS_VERSION-bin\BUILD-INFO.txt"
 
       - name: Set up MSVC
         uses: compnerd/gha-setup-vsdevenv@452f99effa381b81c025ccfbdccaca509bff1b29 # v7
@@ -74,42 +75,44 @@ jobs:
             /m /nologo /verbosity:minimal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # The adapter and every DLL that DeviceAdapters\Aravis\build.xml
-      # installs, in one directory, as in a Micro-Manager installation.
-      - name: Stage the adapter with its DLLs
-        run: |
-          New-Item -ItemType Directory -Force -Path stage | Out-Null
-          Copy-Item micro-manager\mmCoreAndDevices\build\Release\x64\mmgr_dal_AravisCamera.dll stage
-          Copy-Item "3rdpartypublic\aravis\aravis-$env:ARAVIS_VERSION-bin\x64\*.dll" stage
-          Get-ChildItem stage | Format-Table -AutoSize Name, Length
-
-      - name: Upload the staged adapter
-        uses: actions/upload-artifact@v7
-        with:
-          name: mmgr_dal_AravisCamera-staged
-          path: stage
-          if-no-files-found: error
-
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
+      # Aravis is linked statically, so the adapter is all a Micro-Manager
+      # installation needs; the check fails if it loads any DLL that is not
+      # part of Windows or the Visual C++ runtime.
+      - name: Stage the adapter and check its imports
+        run: |
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item micro-manager\mmCoreAndDevices\build\Release\x64\mmgr_dal_AravisCamera.dll stage
+          python -m pip install --disable-pip-version-check pefile==2024.8.26 pymmcore==$env:PYMMCORE_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/check_imports.py stage\mmgr_dal_AravisCamera.dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload the adapter
+        uses: actions/upload-artifact@v7
+        with:
+          name: mmgr_dal_AravisCamera
+          path: stage
+          if-no-files-found: error
+
       - name: Load the adapter with pymmcore
         run: |
-          python -m pip install --disable-pip-version-check pymmcore==$env:PYMMCORE_VERSION
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/load_adapter.py stage
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Aravis discovers a GigE camera served on the loopback interface, so
       # this takes the adapter through discovery, opening the camera and a
-      # snap without any hardware.
+      # snap without any hardware. The tools are statically linked, so the
+      # fake camera takes its GenICam description from the file in the
+      # tools release rather than from Aravis's built-in copy.
       - name: Snap from Aravis's fake GigE camera
         run: |
-          $env:PATH = "$PWD\aravis-tools;$PWD\stage;$env:PATH"
           $fake = Start-Process -PassThru -NoNewWindow `
             -FilePath aravis-tools\arv-fake-gv-camera-0.8.exe `
-            -ArgumentList '-i', '127.0.0.1', '-s', 'GV01'
+            -ArgumentList '-i', '127.0.0.1', '-s', 'GV01', '-g', "$PWD\aravis-tools\arv-fake-camera.xml"
           Start-Sleep -Seconds 3
           python tests/load_adapter.py stage --snap Fake
           $result = $LASTEXITCODE
