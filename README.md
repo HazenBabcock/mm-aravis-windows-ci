@@ -12,16 +12,34 @@ needs, so that the adapter can be added to the Windows nightly builds.
 ## What the workflow does
 
 1. Builds Aravis and its dependencies (GLib, libxml2, zlib, libusb) with
-   [vcpkg](https://vcpkg.io) and MSVC.
+   [vcpkg](https://vcpkg.io) and MSVC, from a pinned vcpkg release.
 2. Arranges the headers, import libraries and DLLs in the directory layout
    that Micro-Manager's Windows build expects to find in `3rdpartypublic`, and
-   saves that directory as a build artifact.
-3. Builds the adapter with MSBuild from the `aravis-windows` branch of
+   saves that directory as a build artifact named
+   `3rdpartypublic-aravis-<version>`. It contains `aravis\aravis-<version>-bin`,
+   with the license of every package a DLL comes from and a `BUILD-INFO.txt`
+   recording how it was built.
+3. Compiles a small test program against the arranged files alone and runs it
+   with only those DLLs on the search path. The program grabs a frame from
+   Aravis's built-in fake camera, so it needs no hardware.
+
+Still to come:
+
+4. Build the adapter with MSBuild from the `aravis-windows` branch of
    [HazenBabcock/mmCoreAndDevices](https://github.com/HazenBabcock/mmCoreAndDevices/tree/aravis-windows).
-4. Installs a current Micro-Manager nightly build, adds the adapter and its
-   DLLs, and checks that the adapter loads.
+5. Install a current Micro-Manager nightly build, add the adapter and its
+   DLLs, and check that the adapter loads.
+
+## Files
+
+- `.github/workflows/build.yml`: the workflow.
+- `scripts/arrange_3rdpartypublic.py`: builds the `3rdpartypublic` layout from
+  vcpkg's output, following the DLL imports from the Aravis DLL to decide
+  which DLLs to include.
+- `tests/smoke.cpp`: the test program.
+- `triplets/x64-windows-release.cmake`: a vcpkg triplet for release-only DLLs.
 
 ## Status
 
-Work in progress; the workflow is being written. The upstream discussion is
+Work in progress. The upstream discussion is
 [micro-manager/mmCoreAndDevices#465](https://github.com/micro-manager/mmCoreAndDevices/issues/465).
