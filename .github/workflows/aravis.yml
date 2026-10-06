@@ -1,9 +1,21 @@
-name: Build
+name: Aravis for 3rdpartypublic
 
+# Builds Aravis and lays it out the way Micro-Manager's 3rdpartypublic holds
+# it. This only needs to run when something that goes into that build
+# changes. The adapter workflow does not use these artifacts directly; it
+# uses a release made from them by hand (see README.md).
 on:
   push:
     branches: [main]
+    paths:
+      - .github/workflows/aravis.yml
+      - scripts/arrange_3rdpartypublic.py
+      - tests/smoke.cpp
+      - triplets/**
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,9 +27,6 @@ env:
   VCPKG_TRIPLET: x64-windows-release  # defined in triplets/
   VCPKG_DISABLE_METRICS: '1'
   VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-cache,readwrite
-  MMCOREANDDEVICES_REPO: HazenBabcock/mmCoreAndDevices
-  MMCOREANDDEVICES_REF: aravis-windows
-  PYMMCORE_VERSION: '12.5.0.75.0'  # device interface 75, as in MMCOREANDDEVICES_REF
 
 jobs:
   aravis:
@@ -38,7 +47,8 @@ jobs:
         run: .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
       # vcpkg checks each cached package against a hash of its inputs, so a
-      # stale entry is rebuilt rather than reused.
+      # stale entry is rebuilt rather than reused. GitHub deletes cache
+      # entries unused for 7 days.
       - name: Restore vcpkg binary cache
         uses: actions/cache/restore@v6
         with:
@@ -47,17 +57,23 @@ jobs:
           restore-keys: vcpkg-${{ env.VCPKG_REF }}-${{ env.VCPKG_TRIPLET }}-
 
       - name: Build Aravis with vcpkg
+        id: build
         run: |
           New-Item -ItemType Directory -Force -Path vcpkg-cache | Out-Null
+          $before = @(Get-ChildItem -Recurse -File vcpkg-cache).Count
           .\vcpkg\vcpkg.exe install "aravis:$env:VCPKG_TRIPLET" `
             --overlay-triplets=triplets `
             --host-triplet=$env:VCPKG_TRIPLET `
             --clean-after-build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $added = @(Get-ChildItem -Recurse -File vcpkg-cache).Count - $before
+          Write-Output "vcpkg added $added package(s) to the binary cache"
+          "added=$added" >> $env:GITHUB_OUTPUT
 
       # Saved straight after the build, so a failure in a later step does not
-      # throw away a long GLib build.
+      # throw away a long GLib build, and only when something new was built.
       - name: Save vcpkg binary cache
+        if: steps.build.outputs.added != '0'
         uses: actions/cache/save@v6
         with:
           path: vcpkg-cache
@@ -127,86 +143,3 @@ jobs:
           name: vcpkg-logs
           path: vcpkg/buildtrees/**/*.log
           if-no-files-found: ignore
-
-  adapter:
-    name: Aravis adapter
-    needs: aravis
-    runs-on: windows-2025
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-
-      # micromanager.sln finds 3rdpartypublic two levels above
-      # mmCoreAndDevices, beside the micro-manager directory.
-      - name: Check out ${{ env.MMCOREANDDEVICES_REPO }} ${{ env.MMCOREANDDEVICES_REF }}
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ env.MMCOREANDDEVICES_REPO }}
-          ref: ${{ env.MMCOREANDDEVICES_REF }}
-          path: micro-manager/mmCoreAndDevices
-
-      - name: Download 3rdpartypublic\aravis
-        uses: actions/download-artifact@v8
-        with:
-          name: 3rdpartypublic-aravis-${{ env.ARAVIS_VERSION }}
-          path: 3rdpartypublic
-
-      - name: Download the Aravis tools
-        uses: actions/download-artifact@v8
-        with:
-          name: aravis-tools-${{ env.ARAVIS_VERSION }}
-          path: aravis-tools
-
-      - name: Set up MSVC
-        uses: compnerd/gha-setup-vsdevenv@452f99effa381b81c025ccfbdccaca509bff1b29 # v7
-        with:
-          toolset_version: '14.4'
-
-      - name: Build the adapter
-        run: |
-          msbuild micro-manager\mmCoreAndDevices\micromanager.sln `
-            /t:AravisCamera /p:Configuration=Release /p:Platform=x64 `
-            /m /nologo /verbosity:minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      # The adapter and every DLL that DeviceAdapters\Aravis\build.xml
-      # installs, in one directory, as in a Micro-Manager installation.
-      - name: Stage the adapter with its DLLs
-        run: |
-          New-Item -ItemType Directory -Force -Path stage | Out-Null
-          Copy-Item micro-manager\mmCoreAndDevices\build\Release\x64\mmgr_dal_AravisCamera.dll stage
-          Copy-Item "3rdpartypublic\aravis\aravis-$env:ARAVIS_VERSION-bin\x64\*.dll" stage
-          Get-ChildItem stage | Format-Table -AutoSize Name, Length
-
-      - name: Upload the staged adapter
-        uses: actions/upload-artifact@v7
-        with:
-          name: mmgr_dal_AravisCamera-staged
-          path: stage
-          if-no-files-found: error
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Load the adapter with pymmcore
-        run: |
-          python -m pip install --disable-pip-version-check pymmcore==$env:PYMMCORE_VERSION
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tests/load_adapter.py stage
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      # Exploratory until it is known to work on Windows: whether Aravis
-      # discovers a GigE camera served on the loopback interface there.
-      - name: Snap from Aravis's fake GigE camera
-        continue-on-error: true
-        run: |
-          $env:PATH = "$PWD\aravis-tools;$PWD\stage;$env:PATH"
-          $fake = Start-Process -PassThru -NoNewWindow `
-            -FilePath aravis-tools\arv-fake-gv-camera-0.8.exe `
-            -ArgumentList '-i', '127.0.0.1', '-s', 'GV01'
-          Start-Sleep -Seconds 3
-          python tests/load_adapter.py stage --snap Fake
-          $result = $LASTEXITCODE
-          Stop-Process -Id $fake.Id -Force
-          exit $result

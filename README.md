@@ -9,38 +9,84 @@ GenICam cameras (GigE Vision and USB3 Vision). Micro-Manager's adapter for it
 currently builds on Linux only. This repository works out what a Windows build
 needs, so that the adapter can be added to the Windows nightly builds.
 
-## What the workflow does
+Micro-Manager's Windows build does not compile its third-party libraries. It
+takes prebuilt headers, import libraries and DLLs from a directory called
+`3rdpartypublic`, which changes rarely. This repository works the same way:
+one workflow builds the Aravis files, a release made from its output fixes
+them, and a second workflow builds and tests the adapter against that release.
+
+## Workflows
+
+**Aravis for 3rdpartypublic** (`.github/workflows/aravis.yml`) runs when one of
+its own inputs changes, or when started by hand. It:
 
 1. Builds Aravis and its dependencies (GLib, libxml2, zlib, libusb) with
-   [vcpkg](https://vcpkg.io) and MSVC, from a pinned vcpkg release.
+   [vcpkg](https://vcpkg.io) and MSVC, from a pinned vcpkg release. Compiled
+   packages are cached between runs.
 2. Arranges the headers, import libraries and DLLs in the directory layout
    that Micro-Manager's Windows build expects to find in `3rdpartypublic`, and
-   saves that directory as a build artifact named
-   `3rdpartypublic-aravis-<version>`. It contains `aravis\aravis-<version>-bin`,
-   with the license of every package a DLL comes from and a `BUILD-INFO.txt`
-   recording how it was built.
-3. Compiles a small test program against the arranged files alone and runs it
+   saves that directory as the artifact `3rdpartypublic-aravis-<version>`. It
+   contains `aravis\aravis-<version>-bin`, with the license of every package a
+   DLL comes from and a `BUILD-INFO.txt` recording how it was built.
+3. Saves the Aravis command-line tools (`arv-tool`, `arv-fake-gv-camera` and
+   others) as the artifact `aravis-tools-<version>`.
+4. Compiles a small test program against the arranged files alone and runs it
    with only those DLLs on the search path. The program grabs a frame from
-   Aravis's built-in fake camera, so it needs no hardware. The Aravis
-   command-line tools (`arv-tool`, `arv-fake-gv-camera` and others) are saved
-   as a second artifact, `aravis-tools-<version>`.
-4. In a second job, builds the adapter with MSBuild from the `aravis-windows`
-   branch of
-   [HazenBabcock/mmCoreAndDevices](https://github.com/HazenBabcock/mmCoreAndDevices/tree/aravis-windows),
-   using the arranged files as `3rdpartypublic`. The adapter and its DLLs are
-   saved as the artifact `mmgr_dal_AravisCamera-staged`.
-5. Loads the adapter with [pymmcore](https://github.com/micro-manager/pymmcore)
+   Aravis's built-in fake camera, so it needs no hardware.
+
+**Aravis adapter** (`.github/workflows/adapter.yml`) runs when its own files
+change, or when started by hand with a choice of mmCoreAndDevices repository and
+branch. It:
+
+1. Downloads the release named in the workflow and unpacks it as
+   `3rdpartypublic`.
+2. Builds the adapter with MSBuild from the `aravis-windows` branch of
+   [HazenBabcock/mmCoreAndDevices](https://github.com/HazenBabcock/mmCoreAndDevices/tree/aravis-windows)
+   (by default), and saves the adapter and its DLLs as the artifact
+   `mmgr_dal_AravisCamera-staged`.
+3. Loads the adapter with [pymmcore](https://github.com/micro-manager/pymmcore)
    and lists the cameras it finds, then tries to snap an image from Aravis's
    fake GigE camera served on the loopback interface.
 
-Still to come:
+To test another branch:
 
-6. Install a current Micro-Manager nightly build, add the adapter and its
-   DLLs, and check that the adapter loads.
+```sh
+gh workflow run adapter.yml -R HazenBabcock/mm-aravis-windows-ci -f ref=<branch>
+```
+
+Still to come: installing a current Micro-Manager nightly build, adding the
+adapter and its DLLs, and checking that the adapter loads there.
+
+## Publishing the Aravis files
+
+Releases are made by hand, after checking a successful run of the Aravis
+workflow, so that the files the adapter is tested against change only when
+someone decides they should. Each release holds two zip files: one unpacks
+into `3rdpartypublic`, the other holds the tools.
+
+```sh
+run=<id of the successful run>
+version=0.8.36
+gh run download $run -R HazenBabcock/mm-aravis-windows-ci \
+    -n 3rdpartypublic-aravis-$version -D release/3rdpartypublic
+gh run download $run -R HazenBabcock/mm-aravis-windows-ci \
+    -n aravis-tools-$version -D release/tools
+(cd release/3rdpartypublic && zip -r ../3rdpartypublic-aravis-$version.zip .)
+(cd release/tools && zip -r ../aravis-tools-$version.zip .)
+gh release create aravis-$version -R HazenBabcock/mm-aravis-windows-ci \
+    release/3rdpartypublic-aravis-$version.zip release/aravis-tools-$version.zip \
+    --title "Aravis $version for 3rdpartypublic" \
+    --notes-file release/3rdpartypublic/aravis/aravis-$version-bin/BUILD-INFO.txt
+```
+
+A rebuild of the same Aravis version gets a numbered tag such as
+`aravis-0.8.36-2`. Either way, update `ARAVIS_RELEASE` in `adapter.yml` to
+switch the adapter tests to the new release.
 
 ## Files
 
-- `.github/workflows/build.yml`: the workflow.
+- `.github/workflows/aravis.yml`, `.github/workflows/adapter.yml`: the
+  workflows.
 - `scripts/arrange_3rdpartypublic.py`: builds the `3rdpartypublic` layout from
   vcpkg's output, following the DLL imports from the Aravis DLL to decide
   which DLLs to include.
